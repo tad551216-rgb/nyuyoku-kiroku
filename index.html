@@ -582,6 +582,7 @@ input.masked.show{-webkit-text-security:none;}
         <button class="btn" id="qrPause">とめる</button>
         <button class="btn" id="qrFaster">はやく</button>
       </div>
+      <button class="btn wide" id="qrNext" style="margin-top:8px;">▶ 次の1枚へ（手で送る）</button>
       <button class="btn wide" id="qrSendClose2" style="margin-top:10px;">閉じる</button>
     </div>
   </div>
@@ -597,10 +598,18 @@ input.masked.show{-webkit-text-security:none;}
       <div class="qrbar" id="scanBar"></div>
       <p class="qrhint" id="scanHint" style="text-align:center;">読み取れた分から順にたまっていきます。全部そろうと、自動で取り込みます。</p>
       <div id="scanOut"></div>
+      <p class="qrhint" id="scanDiag" style="text-align:center;margin-top:8px;font-size:11px;opacity:.75;">—</p>
       <p class="qrhint" style="text-align:center;margin-top:10px;">
         うまく読み取れないときは、明るいところで、相手の画面から<b>20〜30cmほど離して</b>お試しください。
         画面の明るさを上げると読みやすくなります。
       </p>
+      <p class="qrhint" style="text-align:center;margin-top:14px;">
+        それでも読み取れないときは、写真に撮ってからお試しください。<br>
+        （送る側で「とめる」を押し、1枚ずつ撮ってください）
+      </p>
+      <button class="btn wide" id="btnScanPhoto" style="margin-top:6px;">📷 写真を撮って読み取る</button>
+      <input type="file" id="filePhoto" accept="image/*" capture="environment" style="display:none;">
+      <div id="photoOut"></div>
       <button class="btn wide" id="qrScanClose2" style="margin-top:12px;">閉じる</button>
     </div>
   </div>
@@ -1273,6 +1282,10 @@ async function qrSend(kind){
 $('#btnQrUsers').addEventListener('click',()=>qrSend('users'));
 $('#btnQrDay').addEventListener('click',()=>qrSend('day'));
 $('#btnQrMonth').addEventListener('click',()=>qrSend('month'));
+$('#qrNext').addEventListener('click',()=>{
+  qrPaused=true; $('#qrPause').textContent='すすめる';
+  qrIdx=(qrIdx+1)%qrParts.length; qrShow();
+});
 function closeSend(){ qrStop(); $('#dlgQrSend').close(); }
 $('#qrSendClose').addEventListener('click',closeSend);
 $('#qrSendClose2').addEventListener('click',closeSend);
@@ -1282,7 +1295,8 @@ $('#qrSlower').addEventListener('click',()=>{ qrSpeed=Math.min(2000,qrSpeed+200)
 
 /* ===== QRコードを読み取る ===== */
 let scanStream=null, scanRAF=null, scanGot={}, scanSid='', scanTotal=0, scanCv=null;
-function scanReset(){ scanGot={}; scanSid=''; scanTotal=0; $('#scanOut').innerHTML=''; scanPaint(); }
+function scanReset(){ scanGot={}; scanSid=''; scanTotal=0; scanTries=0; scanErr='';
+  $('#scanOut').innerHTML=''; const d=$('#scanDiag'); if(d) d.textContent='—'; scanPaint(); }
 function scanPaint(){
   if(!scanTotal){ $('#scanBar').innerHTML=''; $('#scanStep').textContent='カメラを向けてください'; return; }
   const got=Object.keys(scanGot).length;
@@ -1346,23 +1360,52 @@ async function scanHandle(text){
   }
   if(await mergeIn(obj,'#scanOut')){ toast('取り込みました'); $('#qrOut').innerHTML=$('#scanOut').innerHTML; }
 }
-let scanTick=0;
+let scanTick=0, scanTries=0, scanErr='';
+/* 画像の一部を切り出して、大きめに描き直してから読み取る */
+function tryDecode(v, sx, sy, side, N){
+  try{
+    scanCv.width=N; scanCv.height=N;
+    const ctx=scanCv.getContext('2d',{willReadFrequently:true});
+    ctx.drawImage(v, sx, sy, side, side, 0, 0, N, N);
+    const img=ctx.getImageData(0,0,N,N);
+    const code=jsQR(img.data,N,N,{inversionAttempts:'dontInvert'});
+    return (code&&code.data)?code.data:null;
+  }catch(e){ scanErr=String(e&&e.message||e).slice(0,40); return null; }
+}
+function scanDiag(v){
+  const el=$('#scanDiag'); if(!el) return;
+  el.textContent='映像 '+(v.videoWidth||0)+'×'+(v.videoHeight||0)
+    +'／状態 '+v.readyState+'／解析 '+scanTries+'回'
+    +(scanErr?('／'+scanErr):'');
+}
 function scanLoop(){
   const v=$('#scanVideo');
   scanTick++;
-  /* 解析は重いので、2コマに1回だけ行う */
-  if(v.readyState===v.HAVE_ENOUGH_DATA && scanCv && v.videoWidth && (scanTick%2===0)){
-    /* QRのマス目がつぶれないよう、大きめの解像度で解析する */
-    const w=Math.min(v.videoWidth, 800);
-    const h=Math.max(1, Math.round(v.videoHeight/v.videoWidth*w));
-    scanCv.width=w; scanCv.height=h;
-    const ctx=scanCv.getContext('2d',{willReadFrequently:true});
-    ctx.drawImage(v,0,0,w,h);
-    try{
-      const img=ctx.getImageData(0,0,w,h);
-      const code=jsQR(img.data,w,h,{inversionAttempts:'dontInvert'});
-      if(code&&code.data) scanHandle(code.data);
-    }catch(e){}
+  /* 解析できていないときも状況が分かるように、定期的に表示を更新する */
+  if(scanTick%30===0) scanDiag(v);
+  /* readyState は端末によって 2 で止まることがあるため、2以上で解析する */
+  if(v.readyState>=2 && scanCv && v.videoWidth && (scanTick%2===0)){
+    const vw=v.videoWidth, vh=v.videoHeight;
+    const side=Math.min(vw,vh);
+    const cx=(vw-side)/2, cy=(vh-side)/2;
+    /* 寄り・ふつう・引き の三通りを順に試す */
+    const m=Math.floor(scanTries)%3;
+    let data=null;
+    if(m===0){ const s2=side*0.6, o=(side-s2)/2; data=tryDecode(v, cx+o, cy+o, s2, 700); }
+    else if(m===1){ data=tryDecode(v, cx, cy, side, 700); }
+    else { const w=Math.min(vw,1000), h=Math.round(vh/vw*w);
+           try{
+             scanCv.width=w; scanCv.height=h;
+             const ctx=scanCv.getContext('2d',{willReadFrequently:true});
+             ctx.drawImage(v,0,0,w,h);
+             const img=ctx.getImageData(0,0,w,h);
+             const code=jsQR(img.data,w,h,{inversionAttempts:'dontInvert'});
+             data=(code&&code.data)?code.data:null;
+           }catch(e){ scanErr=String(e&&e.message||e).slice(0,40); }
+    }
+    scanTries++;
+    if(scanTries%10===0) scanDiag(v);
+    if(data) scanHandle(data);
   }
   scanRAF=requestAnimationFrame(scanLoop);
 }
@@ -1387,7 +1430,39 @@ $('#btnQrScan').addEventListener('click',async ()=>{
   if(!scanCv) scanCv=document.createElement('canvas');
   scanLoop();
 });
-function closeScan(){ scanStop(); $('#dlgQrScan').close(); }
+/* 撮った写真からQRを読み取る（動画で読めないときの逃げ道） */
+$('#btnScanPhoto').addEventListener('click',()=>{ $('#filePhoto').value=''; $('#filePhoto').click(); });
+$('#filePhoto').addEventListener('change',e=>{
+  const f=e.target.files&&e.target.files[0]; if(!f) return;
+  $('#photoOut').innerHTML='<p class="qrhint" style="text-align:center;">読み取っています…</p>';
+  const img=new Image();
+  img.onload=()=>{
+    const long=Math.max(img.width,img.height);
+    const sc=Math.min(1, 1600/long);
+    const w=Math.round(img.width*sc), h=Math.round(img.height*sc);
+    const cv=document.createElement('canvas');
+    cv.width=w; cv.height=h;
+    const ctx=cv.getContext('2d',{willReadFrequently:true});
+    ctx.drawImage(img,0,0,w,h);
+    let code=null;
+    try{
+      const d=ctx.getImageData(0,0,w,h);
+      code=jsQR(d.data,w,h,{inversionAttempts:'attemptBoth'});
+    }catch(err){}
+    URL.revokeObjectURL(img.src);
+    if(code&&code.data){
+      $('#photoOut').innerHTML='';
+      scanHandle(code.data);
+    }else{
+      $('#photoOut').innerHTML='<div class="warnbox" style="margin-top:10px;">'+
+        'この写真からは読み取れませんでした。<br>QRコード全体がはっきり写るように、もう一度お試しください。</div>';
+    }
+  };
+  img.onerror=()=>{ $('#photoOut').innerHTML='<div class="warnbox" style="margin-top:10px;">写真を開けませんでした。</div>'; };
+  img.src=URL.createObjectURL(f);
+});
+
+function closeScan(){ scanStop(); $('#photoOut').innerHTML=''; $('#dlgQrScan').close(); }
 $('#qrScanClose').addEventListener('click',closeScan);
 $('#qrScanClose2').addEventListener('click',closeScan);
 
