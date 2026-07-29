@@ -95,9 +95,10 @@ h2.sec:first-child{margin-top:4px;}
 .empty{text-align:center;color:var(--muted);font-size:13.5px;padding:26px 10px;line-height:1.9;}
 
 /* シート(記録) */
-dialog{border:none;padding:0;background:none;max-width:100%;}
+dialog{border:none;padding:0;background:none;max-width:100%;
+  margin:calc(env(safe-area-inset-top) + 10px) auto auto auto;}
 dialog::backdrop{background:rgba(27,42,74,.6);}
-.sheet{background:var(--paper);width:min(680px,94vw);max-height:80vh;overflow:auto;
+.sheet{background:var(--paper);width:min(680px,94vw);max-height:78vh;max-height:calc(100dvh - env(safe-area-inset-top) - 56px);overflow:auto;
   border-radius:16px;padding:0 0 16px;}
 .sheet-head{position:sticky;top:0;background:var(--ink);color:#fff;padding:13px 16px;
   display:flex;align-items:center;gap:10px;border-radius:16px 16px 0 0;z-index:2;}
@@ -179,13 +180,16 @@ table.tbl th{background:var(--paper2);font-weight:700;white-space:nowrap;}
 input.masked{-webkit-text-security:disc;}
 input.masked.show{-webkit-text-security:none;}
 .qrwrap{text-align:center;}
-.qrwrap canvas{width:min(86vw,420px);height:auto;background:#fff;border:10px solid #fff;
+.qrwrap canvas{width:min(78vw,360px);height:auto;background:#fff;border:10px solid #fff;
   border-radius:8px;box-shadow:0 2px 8px rgba(27,42,74,.18);}
 .qrstep{font-size:19px;font-weight:700;margin:12px 0 4px;}
 .qrbar{display:flex;gap:4px;justify-content:center;margin:8px 0 4px;flex-wrap:wrap;}
 .qrbar i{width:22px;height:8px;border-radius:4px;background:var(--line2);font-style:normal;}
 .qrbar i.on{background:var(--green);}
 .qrhint{font-size:13px;color:var(--muted);line-height:1.9;margin-top:8px;}
+.qrctl{display:flex;gap:6px;margin-top:12px;}
+.qrctl button{flex:1;border:1.5px solid var(--line2);background:var(--white);
+  border-radius:9px;padding:11px 0;font-size:13px;font-weight:700;color:var(--ink2);}
 .scanwrap{position:relative;background:#000;border-radius:12px;overflow:hidden;}
 .scanwrap video{width:100%;display:block;max-height:42vh;object-fit:cover;}
 .scanwrap .frame{position:absolute;inset:12%;border:3px solid rgba(255,255,255,.85);border-radius:14px;pointer-events:none;}
@@ -577,12 +581,12 @@ input.masked.show{-webkit-text-security:none;}
       <p class="qrstep" id="qrStep">—</p>
       <div class="qrbar" id="qrBar"></div>
       <p class="qrhint" id="qrHint"></p>
-      <div class="row" style="margin-top:12px;">
-        <button class="btn" id="qrSlower">おそく</button>
-        <button class="btn" id="qrPause">とめる</button>
-        <button class="btn" id="qrFaster">はやく</button>
+      <div class="qrctl">
+        <button id="qrSlower">おそく</button>
+        <button id="qrPause">とめる</button>
+        <button id="qrFaster">はやく</button>
+        <button id="qrNext">▶次へ</button>
       </div>
-      <button class="btn wide" id="qrNext" style="margin-top:8px;">▶ 次の1枚へ（手で送る）</button>
       <button class="btn wide" id="qrSendClose2" style="margin-top:10px;">閉じる</button>
     </div>
   </div>
@@ -608,6 +612,7 @@ input.masked.show{-webkit-text-security:none;}
         （送る側で「とめる」を押し、1枚ずつ撮ってください）
       </p>
       <button class="btn wide" id="btnScanPhoto" style="margin-top:6px;">📷 写真を撮って読み取る</button>
+      <button class="btn wide" id="btnSelfTest" style="margin-top:6px;">🔧 読み取り機能の自己診断</button>
       <input type="file" id="filePhoto" accept="image/*" capture="environment" style="display:none;">
       <div id="photoOut"></div>
       <button class="btn wide" id="qrScanClose2" style="margin-top:12px;">閉じる</button>
@@ -1430,6 +1435,39 @@ $('#btnQrScan').addEventListener('click',async ()=>{
   if(!scanCv) scanCv=document.createElement('canvas');
   scanLoop();
 });
+/* 自己診断：QRを自分で作って、自分で読み取れるか試す。
+   ここで成功すれば、読み取りの仕組み自体は動いています。 */
+$('#btnSelfTest').addEventListener('click',()=>{
+  const out=$('#photoOut');
+  const lines=[];
+  lines.push('QR作成の部品：'+(typeof qrcode==='undefined'?'★読み込めていません':'あり'));
+  lines.push('QR読取の部品：'+(typeof jsQR==='undefined'?'★読み込めていません':'あり'));
+  const v=$('#scanVideo');
+  lines.push('カメラ映像：'+(v.videoWidth||0)+'×'+(v.videoHeight||0)+'（状態 '+v.readyState+'）');
+  try{
+    const text='HQR1:test:1:1:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    const qr=qrcode(0,'M'); qr.addData(text); qr.make();
+    const n=qr.getModuleCount(), sc=6, quiet=4, size=(n+quiet*2)*sc;
+    const cv=document.createElement('canvas'); cv.width=size; cv.height=size;
+    const ctx=cv.getContext('2d',{willReadFrequently:true});
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,size,size);
+    ctx.fillStyle='#000';
+    for(let r=0;r<n;r++) for(let c=0;c<n;c++) if(qr.isDark(r,c))
+      ctx.fillRect((c+quiet)*sc,(r+quiet)*sc,sc,sc);
+    const d=ctx.getImageData(0,0,size,size);
+    const code=jsQR(d.data,size,size,{inversionAttempts:'dontInvert'});
+    lines.push('自分で作ったQRを読む：'+(code&&code.data===text?'成功':'★失敗'));
+  }catch(e){
+    lines.push('自分で作ったQRを読む：★エラー '+String(e&&e.message||e).slice(0,50));
+  }
+  const okAll=lines.every(l=>l.indexOf('★')<0);
+  out.innerHTML='<div class="'+(okAll?'okbox':'warnbox')+'" style="margin-top:10px;font-size:12.5px;">'
+    +lines.map(l=>l.replace(/</g,'&lt;')).join('<br>')
+    +'<br><br>'+(okAll
+      ? '読み取りの仕組みは正しく動いています。あとは写り方の問題ですので、明るさと距離を変えてお試しください。'
+      : '★の付いた項目が原因です。この画面を撮ってお知らせください。')+'</div>';
+});
+
 /* 撮った写真からQRを読み取る（動画で読めないときの逃げ道） */
 $('#btnScanPhoto').addEventListener('click',()=>{ $('#filePhoto').value=''; $('#filePhoto').click(); });
 $('#filePhoto').addEventListener('change',e=>{
