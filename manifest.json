@@ -1,6 +1,7 @@
 {
   "name": "入浴きろく帖",
   "short_name": "入浴きろく帖",
+  "id": "/nyuyoku-kiroku/",
   "description": "日帰り入浴特化型デイサービスのための記録アプリ。バイタル・可否確認・皮膚観察・家族への申し送りまで。データは端末の中だけ。",
   "lang": "ja",
   "start_url": "./index.html",
@@ -28,5 +29,12 @@
       "type": "image/png",
       "purpose": "maskable"
     }
-  ]
+  ],
+  "related_applications": [
+    {
+      "platform": "webapp",
+      "url": "https://tad551216-rgb.github.io/nyuyoku-kiroku/manifest.json"
+    }
+  ],
+  "prefer_related_applications": false
 }
